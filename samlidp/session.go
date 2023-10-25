@@ -13,7 +13,7 @@ import (
 
 	"github.com/zenazn/goji/web"
 
-	"github.com/crewjam/saml"
+	"github.com/tohanilhan/saml"
 )
 
 var sessionMaxAge = time.Hour
