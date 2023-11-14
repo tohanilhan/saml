@@ -46,6 +46,7 @@ type Middleware struct {
 	ResponseBinding string // either saml.HTTPPostBinding or saml.HTTPArtifactBinding
 	RequestTracker  RequestTracker
 	Session         SessionProvider
+	Error           error
 }
 
 // ServeHTTP implements http.Handler and serves the SAML-specific HTTP endpoints
@@ -80,7 +81,8 @@ func (m *Middleware) ServeACS(w http.ResponseWriter, r *http.Request) {
 	err := r.ParseForm()
 	if err != nil {
 		m.OnError(w, r, err)
-		return
+		m.CreateErr(err)
+		// return
 	}
 
 	possibleRequestIDs := []string{}
@@ -96,7 +98,8 @@ func (m *Middleware) ServeACS(w http.ResponseWriter, r *http.Request) {
 	assertion, err := m.ServiceProvider.ParseResponse(r, possibleRequestIDs)
 	if err != nil {
 		m.OnError(w, r, err)
-		return
+		m.CreateErr(err)
+		// return
 	}
 
 	m.CreateSessionFromAssertion(w, r, assertion, m.ServiceProvider.DefaultRedirectURI)
@@ -120,6 +123,7 @@ func (m *Middleware) RequireAccount(handler http.Handler) http.Handler {
 		}
 
 		m.OnError(w, r, err)
+		m.CreateErr(err)
 	})
 }
 
@@ -202,12 +206,14 @@ func (m *Middleware) CreateSessionFromAssertion(w http.ResponseWriter, r *http.R
 				}
 			} else {
 				m.OnError(w, r, err)
-				return
+				m.CreateErr(err)
+				// return
 			}
 		} else {
 			if err := m.RequestTracker.StopTrackingRequest(w, r, trackedRequestIndex); err != nil {
 				m.OnError(w, r, err)
-				return
+				m.CreateErr(err)
+				// return
 			}
 
 			redirectURI = trackedRequest.URI
@@ -216,7 +222,8 @@ func (m *Middleware) CreateSessionFromAssertion(w http.ResponseWriter, r *http.R
 
 	if err := m.Session.CreateSession(w, r, assertion); err != nil {
 		m.OnError(w, r, err)
-		return
+		m.CreateErr(err)
+		// return
 	}
 
 	http.Redirect(w, r, redirectURI, http.StatusFound)
@@ -250,4 +257,8 @@ func RequireAttribute(name, value string) func(http.Handler) http.Handler {
 			http.Error(w, http.StatusText(http.StatusForbidden), http.StatusForbidden)
 		})
 	}
+}
+
+func (m *Middleware) CreateErr(err error) {
+	m.Error = err
 }

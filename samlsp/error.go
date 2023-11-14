@@ -21,5 +21,7 @@ func DefaultOnError(w http.ResponseWriter, _ *http.Request, err error) {
 	} else {
 		log.Printf("ERROR: %s", err)
 	}
-	http.Error(w, http.StatusText(http.StatusForbidden), http.StatusForbidden)
+
+	// http.Error(w, http.StatusText(http.StatusForbidden), http.StatusForbidden)
+
 }
