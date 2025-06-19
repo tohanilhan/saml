@@ -7,6 +7,7 @@ import (
 	"crypto/rsa"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/base64"
 	"encoding/xml"
 	"flag"
 	"fmt"
@@ -14,12 +15,7 @@ import (
 	"net/url"
 	"strings"
 
-	"github.com/dchest/uniuri"
-	"github.com/kr/pretty"
-	"github.com/zenazn/goji"
-	"github.com/zenazn/goji/web"
-
-	"github.com/tohanilhan/saml/samlsp"
+	"github.com/crewjam/saml/samlsp"
 )
 
 var links = map[string]Link{}
@@ -32,10 +28,16 @@ type Link struct {
 }
 
 // CreateLink handles requests to create links
-func CreateLink(_ web.C, w http.ResponseWriter, r *http.Request) {
+func CreateLink(w http.ResponseWriter, r *http.Request) {
 	account := r.Header.Get("X-Remote-User")
+
+	randomness := make([]byte, 8)
+	if _, err := r.Body.Read(randomness); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
 	l := Link{
-		ShortLink: uniuri.New(),
+		ShortLink: base64.RawURLEncoding.EncodeToString(randomness),
 		Target:    r.FormValue("t"),
 		Owner:     account,
 	}
@@ -45,7 +47,7 @@ func CreateLink(_ web.C, w http.ResponseWriter, r *http.Request) {
 }
 
 // ServeLink handles requests to redirect to a link
-func ServeLink(_ web.C, w http.ResponseWriter, r *http.Request) {
+func ServeLink(w http.ResponseWriter, r *http.Request) {
 	l, ok := links[strings.TrimPrefix(r.URL.Path, "/")]
 	if !ok {
 		http.Error(w, http.StatusText(http.StatusNotFound), http.StatusNotFound)
@@ -55,11 +57,32 @@ func ServeLink(_ web.C, w http.ResponseWriter, r *http.Request) {
 }
 
 // ListLinks returns a list of the current user's links
-func ListLinks(_ web.C, w http.ResponseWriter, r *http.Request) {
+func ListLinks(w http.ResponseWriter, r *http.Request) {
 	account := r.Header.Get("X-Remote-User")
 	for _, l := range links {
 		if l.Owner == account {
 			fmt.Fprintf(w, "%s\n", l.ShortLink)
+		}
+	}
+}
+
+// ServeWhoami serves the basic whoami endpoint
+func ServeWhoami(w http.ResponseWriter, r *http.Request) {
+	w.Header().Add("Content-Type", "text/plain")
+
+	session := samlsp.SessionFromContext(r.Context())
+	if session == nil {
+		fmt.Fprintln(w, "not signed in")
+		return
+	}
+	fmt.Fprintln(w, "signed in")
+	sessionWithAttrs, ok := session.(samlsp.SessionWithAttributes)
+	if ok {
+		fmt.Fprintln(w, "attributes:")
+		for name, values := range sessionWithAttrs.GetAttributes() {
+			for _, value := range values {
+				fmt.Fprintf(w, "%s: %v\n", name, value)
+			}
 		}
 	}
 }
@@ -140,11 +163,9 @@ func main() {
 
 	// register with the service provider
 	spMetadataBuf, _ := xml.MarshalIndent(samlSP.ServiceProvider.Metadata(), "", "  ")
-
 	spURL := *idpMetadataURL
 	spURL.Path = "/services/sp"
 	resp, err := http.Post(spURL.String(), "text/xml", bytes.NewReader(spMetadataBuf))
-
 	if err != nil {
 		panic(err)
 	}
@@ -153,20 +174,12 @@ func main() {
 		panic(err)
 	}
 
-	goji.Handle("/saml/*", samlSP)
+	mux := http.NewServeMux()
+	mux.Handle("GET /saml/", samlSP)
+	mux.HandleFunc("GET /{link}", ServeLink)
+	mux.Handle("GET /whoami", samlSP.RequireAccount(http.HandlerFunc(ServeWhoami)))
+	mux.Handle("POST /", samlSP.RequireAccount(http.HandlerFunc(CreateLink)))
+	mux.Handle("GET /", samlSP.RequireAccount(http.HandlerFunc(ListLinks)))
 
-	authMux := web.New()
-	authMux.Use(samlSP.RequireAccount)
-	authMux.Get("/whoami", func(w http.ResponseWriter, r *http.Request) {
-		if _, err := pretty.Fprintf(w, "%# v", r); err != nil {
-			panic(err)
-		}
-	})
-	authMux.Post("/", CreateLink)
-	authMux.Get("/", ListLinks)
-
-	goji.Handle("/*", authMux)
-	goji.Get("/:link", ServeLink)
-
-	goji.Serve()
+	http.ListenAndServe(":8080", mux)
 }
