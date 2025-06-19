@@ -61,7 +61,7 @@ formatters:
   settings:
     goimports:
       local-prefixes:
-        - github.com/crewjam/saml
+        - github.com/tohanilhan/saml
   exclusions:
     generated: lax
     paths:
